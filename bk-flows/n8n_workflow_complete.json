@@ -1,0 +1,240 @@
+{
+  "name": "Chatbot Libros WhatsApp - Completo",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start-node",
+      "name": "START",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "path": "webhook-whatsapp",
+        "options": {}
+      },
+      "id": "webhook-node",
+      "name": "1. Recibir Mensaje WhatsApp",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [460, 300],
+      "webhookId": "whatsapp-webhook-id",
+      "notes": "Recibe mensajes de WhatsApp.\nConfigura esta URL en tu proveedor (Twilio, 360Dialog, etc.)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "{\n  \"model\": \"text-embedding-ada-002\",\n  \"input\": \"{{ $json.body.message.text }}\"\n}",
+        "options": {}
+      },
+      "id": "embedding-node",
+      "name": "2. Crear Embedding Consulta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [680, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-creds-id",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Función para buscar en la base de conocimiento local\nconst fs = require('fs');\nconst path = require('path');\n\n// Simular búsqueda en base de conocimiento\n// En producción, aquí cargarías tu knowledge_base.pkl\nfunction searchKnowledge(queryEmbedding, query) {\n  // Esta es una búsqueda simplificada\n  // Deberías cargar tu archivo knowledge_base.pkl aquí\n  \n  const mockResults = {\n    \"libros\": [\n      {\n        \"content\": \"Libro: Cien años de soledad\\nAutor: Gabriel García Márquez\\nEditorial: Sudamericana\\nPaís: Colombia\\nPrecio: $25.99\\nEstado: disponible\",\n        \"score\": 0.85\n      },\n      {\n        \"content\": \"Libro: El amor en los tiempos del cólera\\nAutor: Gabriel García Márquez\\nEditorial: Oveja Negra\\nPaís: Colombia\\nPrecio: $22.50\\nEstado: disponible\",\n        \"score\": 0.82\n      }\n    ],\n    \"conversacion\": [\n      {\n        \"content\": \"Conversación sobre libros:\\n- Usuario: ¿Tienes algo de García Márquez?\\n- Vendedor: Sí, tenemos varios títulos disponibles\\n- Usuario: ¿Cuál me recomendas?\\n- Vendedor: Cien años de soledad es excelente\",\n        \"score\": 0.78\n      }\n    ]\n  };\n  \n  // Buscar contexto relevante basado en palabras clave\n  const queryLower = query.toLowerCase();\n  let results = [];\n  \n  // Búsqueda simple por palabras clave\n  if (queryLower.includes('garcía') || queryLower.includes('marquez') || queryLower.includes('márquez')) {\n    results = [...mockResults.libros, ...mockResults.conversacion];\n  } else if (queryLower.includes('libro') || queryLower.includes('autor')) {\n    results = mockResults.libros;\n  } else {\n    results = mockResults.libros.slice(0, 2); // Resultados por defecto\n  }\n  \n  return results;\n}\n\n// Obtener datos del nodo anterior\nconst queryEmbedding = $input.first().json.data[0].embedding;\nconst originalQuery = $('1. Recibir Mensaje WhatsApp').first().json.body.message.text;\n\n// Buscar en base de conocimiento\nconst searchResults = searchKnowledge(queryEmbedding, originalQuery);\n\n// Preparar contexto\nconst contextParts = searchResults.map(result => result.content);\nconst context = contextParts.join('\\n---\\n');\n\nreturn [{\n  json: {\n    context: context,\n    query: originalQuery,\n    results: searchResults\n  }\n}];"
+      },
+      "id": "search-node",
+      "name": "3. Buscar en Base Conocimiento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300],
+      "notes": "Busca contenido relevante en la base de conocimiento local.\nEn producción, cargaría el archivo knowledge_base.pkl"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "{\n  \"model\": \"gpt-3.5-turbo\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Eres un asistente especializado en libros. Respondes consultas sobre catálogo de libros y recomendaciones basándote ÚNICAMENTE en la información proporcionada. Si no tienes la información específica, lo dices claramente. Eres amigable y profesional. Siempre incluye precios y disponibilidad cuando sea relevante.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Contexto disponible:\\n{{ $json.context }}\\n\\nPregunta del cliente: {{ $json.query }}\\n\\nPor favor responde basándote en el contexto proporcionado.\"\n    }\n  ],\n  \"max_tokens\": 500,\n  \"temperature\": 0.7\n}",
+        "options": {}
+      },
+      "id": "openai-response-node",
+      "name": "4. Generar Respuesta IA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1120, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-creds-id",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.twilio.com/2010-04-01/Accounts/YOUR_ACCOUNT_SID/Messages.json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/x-www-form-urlencoded"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "To",
+              "value": "{{ $('1. Recibir Mensaje WhatsApp').item.json.body.sender.id }}"
+            },
+            {
+              "name": "From",
+              "value": "whatsapp:+YOUR_TWILIO_NUMBER"
+            },
+            {
+              "name": "Body",
+              "value": "{{ $json.choices[0].message.content }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "send-whatsapp-node",
+      "name": "5. Enviar Respuesta WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1340, 300],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "twilio-creds-id",
+          "name": "Twilio Credentials"
+        }
+      },
+      "notes": "Envía la respuesta via WhatsApp usando Twilio.\\nConfigura tus credenciales de Twilio y reemplaza YOUR_ACCOUNT_SID y YOUR_TWILIO_NUMBER"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\n  \"body\": {\n    \"message\": {\n      \"text\": \"Hola! ¿Tienes algún libro de García Márquez disponible?\"\n    },\n    \"sender\": {\n      \"id\": \"whatsapp:+5491155071717\"\n    }\n  }\n}",
+        "options": {}
+      },
+      "id": "test-data-node",
+      "name": "Datos de Prueba",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 180],
+      "notes": "Nodo para pruebas. Simula un mensaje de WhatsApp entrante."
+    }
+  ],
+  "connections": {
+    "START": {
+      "main": [
+        [
+          {
+            "node": "Datos de Prueba",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Recibir Mensaje WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "2. Crear Embedding Consulta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Crear Embedding Consulta": {
+      "main": [
+        [
+          {
+            "node": "3. Buscar en Base Conocimiento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Buscar en Base Conocimiento": {
+      "main": [
+        [
+          {
+            "node": "4. Generar Respuesta IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Generar Respuesta IA": {
+      "main": [
+        [
+          {
+            "node": "5. Enviar Respuesta WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Datos de Prueba": {
+      "main": [
+        [
+          {
+            "node": "2. Crear Embedding Consulta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "workflow-v2",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "id": "BookChatbotWorkflow",
+  "tags": ["chatbot", "whatsapp", "libros"]
+}

@@ -1,0 +1,208 @@
+{
+  "name": "Chatbot WhatsApp con IA (RAG)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "27681326-11e2-4752-b883-e11a3d240d04",
+      "name": "START",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [
+        -100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "path": "webhook-whatsapp",
+        "options": {}
+      },
+      "id": "e21b76e2-2253-433a-9288-080c58d04838",
+      "name": "1. Recibir Mensaje de WhatsApp",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        120,
+        300
+      ],
+      "webhookId": "b53f3e82-e8ef-41c3-8ab3-e81c0c29af57",
+      "notes": "Este es el punto de entrada. \nDebes configurar la URL de este webhook en tu proveedor de API de WhatsApp (ej: Twilio, 360dialog).\n\nEl path 'webhook-whatsapp' puede ser el que tú quieras."
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "headerAuth",
+        "options": {},
+        "bodyParameters": {
+          "model": "text-embedding-3-small",
+          "input": "={{ $json.body.message.text }}"
+        }
+      },
+      "id": "b10ab7cd-46d5-47e1-b4ed-ec559cf41d8e",
+      "name": "2. Crear Embedding (OpenAI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        360,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_OPENAI_CREDENTIALS_ID",
+          "name": "OpenAI Account"
+        }
+      },
+      "notes": "Este nodo convierte la pregunta del usuario en un vector numérico.\n\nIMPORTANTE:\n1. Necesitas configurar tus credenciales de OpenAI.\n2. La expresión `{{ $json.body.message.text }}` asume el formato de tu proveedor de WhatsApp. Quizás necesites ajustarla para extraer el texto del mensaje."
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "jsonMode": false,
+        "messages": [
+          {
+            "role": "user",
+            "content": "=CONTEXTO:\n{{ $('4. Construir Prompt').item.json.contexto }}\n\n---\n\nPREGUNTA DEL USUARIO:\n{{ $('4. Construir Prompt').item.json.pregunta }}\n\n---\n\nINSTRUCCIONES:\nResponde a la pregunta del usuario de forma amable y concisa, basándote ÚNICAMENTE en la información del CONTEXTO proporcionado. Si la respuesta no se encuentra en el contexto, indica amablemente que no tienes esa información."
+          }
+        ],
+        "options": {}
+      },
+      "id": "90ffdc24-2c21-4f93-8120-d667c3b9b940",
+      "name": "5. Generar Respuesta (ChatGPT)",
+      "type": "n8n-nodes-base.openAiChat",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        300
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "YOUR_OPENAI_CREDENTIALS_ID",
+          "name": "OpenAI Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "URL_DE_TU_PROVEEDOR_DE_WHATSAPP_PARA_ENVIAR_MENSAJES",
+        "authentication": "headerAuth",
+        "options": {},
+        "bodyParameters": {
+          "to": "={{ $('1. Recibir Mensaje de WhatsApp').item.json.body.sender.id }}",
+          "text": "={{ $('5. Generar Respuesta (ChatGPT)').item.json.choices[0].message.content }}"
+        }
+      },
+      "id": "96f0144f-f069-4e78-9e54-521199a5e840",
+      "name": "6. Enviar Respuesta a WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1280,
+        300
+      ],
+      "notes": "Este nodo envía la respuesta final al usuario.\n\nIMPORTANTE:\n1. Reemplaza la URL por la de tu proveedor (ej: Twilio).\n2. Ajusta los parámetros del body (to, text) según la documentación de tu proveedor.\n3. La expresión para 'to' y 'text' son ejemplos y probablemente necesiten ser ajustadas."
+    },
+    {
+      "parameters": {
+        "url": "URL_DE_TU_BASE_DE_DATOS_VECTORIAL_AQUI",
+        "authentication": "headerAuth",
+        "options": {},
+        "bodyParameters": {
+          "vector": "={{ $('2. Crear Embedding (OpenAI)').item.json.data[0].embedding }}",
+          "topK": 3,
+          "includeMetadata": true
+        }
+      },
+      "id": "872d8e41-6101-4464-9488-874254641951",
+      "name": "3. Buscar Contexto en Vector DB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        580,
+        300
+      ],
+      "notes": "Este nodo busca los fragmentos de texto más relevantes en tu base de datos (ej: Pinecone, Weaviate, ChromaDB).\n\nIMPORTANTE:\n1. Reemplaza la URL por el endpoint de tu base de datos vectorial.\n2. Configura la autenticación si es necesaria.\n3. El `body` es un ejemplo para Pinecone. Ajústalo según tu proveedor de base de datos."
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "contexto",
+              "value": "={{ $('3. Buscar Contexto en Vector DB').item.json.matches.map(match => match.metadata.text).join('\\n---\\n') }}"
+            },
+            {
+              "name": "pregunta",
+              "value": "={{ $('1. Recibir Mensaje de WhatsApp').item.json.body.message.text }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "31c07123-5e91-4d7a-85ef-9a5728a47469",
+      "name": "4. Construir Prompt",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        820,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "1. Recibir Mensaje de WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "2. Crear Embedding (OpenAI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Crear Embedding (OpenAI)": {
+      "main": [
+        [
+          {
+            "node": "3. Buscar Contexto en Vector DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5. Generar Respuesta (ChatGPT)": {
+      "main": [
+        [
+          {
+            "node": "6. Enviar Respuesta a WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Buscar Contexto en Vector DB": {
+      "main": [
+        [
+          {
+            "node": "4. Construir Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Construir Prompt": {
+      "main": [
+        [
+          {
+            "node": "5. Generar Respuesta (ChatGPT)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,287 @@
+{
+  "name": "Chatbot Libros WhatsApp - Google Docs Real Time",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start-node",
+      "name": "START",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "path": "webhook-whatsapp",
+        "options": {}
+      },
+      "id": "webhook-node",
+      "name": "1. Recibir Mensaje WhatsApp",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [460, 300],
+      "webhookId": "whatsapp-webhook-id",
+      "notes": "Recibe mensajes de WhatsApp desde tu proveedor"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "resource": "sheet",
+        "operation": "readRows",
+        "documentId": "={{ $json.GOOGLE_SHEET_ID }}",
+        "sheetName": "Hoja 1",
+        "options": {}
+      },
+      "id": "google-sheets-node",
+      "name": "2. Leer Catálogo (Google Sheets)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [680, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-creds",
+          "name": "Google Sheets"
+        }
+      },
+      "notes": "Lee el catálogo actualizado desde Google Sheets en tiempo real"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "resource": "document",
+        "operation": "get",
+        "documentId": "={{ $json.GOOGLE_DOC_ID }}"
+      },
+      "id": "google-docs-node",
+      "name": "3. Leer Conversaciones (Google Docs)",
+      "type": "n8n-nodes-base.googleDocs",
+      "typeVersion": 2,
+      "position": [680, 180],
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "google-docs-creds",
+          "name": "Google Docs"
+        }
+      },
+      "notes": "Lee las conversaciones históricas desde Google Docs"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Procesar datos de Google Sheets y Google Docs para crear contexto relevante\n\n// Obtener mensaje del usuario\nconst userMessage = $('1. Recibir Mensaje WhatsApp').first().json.body.message.text.toLowerCase();\n\n// Obtener datos de Google Sheets (catálogo)\nconst catalogData = $('2. Leer Catálogo (Google Sheets)').all();\n\n// Obtener datos de Google Docs (conversaciones)\nconst docsData = $('3. Leer Conversaciones (Google Docs)').first().json;\n\n// Función para buscar libros relevantes\nfunction searchBooks(query, catalog) {\n  const results = [];\n  const queryWords = query.split(' ');\n  \n  catalog.forEach(item => {\n    if (!item.json) return;\n    \n    const book = item.json;\n    let relevanceScore = 0;\n    \n    // Buscar en título\n    const title = (book['Título'] || book['titulo'] || '').toLowerCase();\n    queryWords.forEach(word => {\n      if (title.includes(word)) relevanceScore += 3;\n    });\n    \n    // Buscar en autor\n    const author = (book['Autor'] || book['autor'] || '').toLowerCase();\n    queryWords.forEach(word => {\n      if (author.includes(word)) relevanceScore += 2;\n    });\n    \n    // Buscar en otros campos\n    const editorial = (book['Editorial'] || book['editorial'] || '').toLowerCase();\n    const pais = (book['País'] || book['Pais'] || book['pais'] || '').toLowerCase();\n    \n    queryWords.forEach(word => {\n      if (editorial.includes(word) || pais.includes(word)) relevanceScore += 1;\n    });\n    \n    if (relevanceScore > 0) {\n      // Determinar disponibilidad\n      const stock = String(book['Stock'] || book['stock'] || '0').replace('.0', '');\n      const disponible = stock !== '0' && stock !== '' && stock.toLowerCase() !== 'no';\n      \n      results.push({\n        titulo: book['Título'] || book['titulo'] || 'Sin título',\n        autor: book['Autor'] || book['autor'] || 'Sin autor',\n        editorial: book['Editorial'] || book['editorial'] || 'Sin editorial',\n        pais: book['País'] || book['Pais'] || book['pais'] || 'Sin país',\n        precio: book['Precio'] || book['precio'] || 'Sin precio',\n        stock: stock,\n        disponible: disponible,\n        relevanceScore: relevanceScore\n      });\n    }\n  });\n  \n  // Ordenar por relevancia\n  return results.sort((a, b) => b.relevanceScore - a.relevanceScore).slice(0, 5);\n}\n\n// Función para buscar en conversaciones históricas\nfunction searchConversations(query, docsContent) {\n  if (!docsContent || !docsContent.body) return [];\n  \n  const conversations = [];\n  const content = JSON.stringify(docsContent.body).toLowerCase();\n  const queryWords = query.split(' ');\n  \n  // Buscar coincidencias en conversaciones\n  queryWords.forEach(word => {\n    if (content.includes(word)) {\n      conversations.push({\n        relevancia: `Conversación histórica relacionada con: ${word}`,\n        contexto: 'Se encontraron referencias en conversaciones anteriores'\n      });\n    }\n  });\n  \n  return conversations.slice(0, 3);\n}\n\n// Realizar búsquedas\nconst relevantBooks = searchBooks(userMessage, catalogData);\nconst relevantConversations = searchConversations(userMessage, docsData);\n\n// Crear contexto para la IA\nlet context = \"CATÁLOGO ACTUAL:\\n\";\n\nif (relevantBooks.length > 0) {\n  relevantBooks.forEach((book, index) => {\n    const stockStatus = book.disponible ? `✅ DISPONIBLE (Stock: ${book.stock})` : `❌ SIN STOCK`;\n    context += `\\n${index + 1}. 📚 ${book.titulo}\\n`;\n    context += `   👤 Autor: ${book.autor}\\n`;\n    context += `   🏢 Editorial: ${book.editorial}\\n`;\n    context += `   🌍 País: ${book.pais}\\n`;\n    context += `   💰 Precio: $${book.precio}\\n`;\n    context += `   📦 Estado: ${stockStatus}\\n`;\n  });\n} else {\n  context += \"\\nNo se encontraron libros específicos para esta consulta.\\n\";\n}\n\nif (relevantConversations.length > 0) {\n  context += \"\\n\\nREFERENCIAS DE CONVERSACIONES ANTERIORES:\\n\";\n  relevantConversations.forEach((conv, index) => {\n    context += `${index + 1}. ${conv.relevancia}\\n`;\n  });\n}\n\n// Determinar tipo de consulta\nlet queryType = 'general';\nif (userMessage.includes('precio')) queryType = 'precio';\nelse if (userMessage.includes('stock') || userMessage.includes('disponible')) queryType = 'stock';\nelse if (userMessage.includes('autor')) queryType = 'autor';\nelse if (userMessage.includes('recomend')) queryType = 'recomendacion';\n\nreturn [{\n  json: {\n    userMessage: $('1. Recibir Mensaje WhatsApp').first().json.body.message.text,\n    context: context,\n    queryType: queryType,\n    foundBooks: relevantBooks.length,\n    foundConversations: relevantConversations.length,\n    books: relevantBooks\n  }\n}];"
+      },
+      "id": "process-data-node",
+      "name": "4. Procesar y Buscar Información",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 240],
+      "notes": "Procesa los datos de Google Sheets y Google Docs para encontrar información relevante"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "{\n  \"model\": \"gpt-3.5-turbo\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Eres un asistente especializado en una librería. Tu trabajo es ayudar a los clientes con consultas sobre libros, precios, disponibilidad y recomendaciones. CARACTERÍSTICAS IMPORTANTES:\\n\\n1. 📚 INFORMACIÓN ACTUALIZADA: Siempre consultas el catálogo en tiempo real, por lo que tus datos de stock y precios son precisos\\n2. 🎯 RESPUESTAS ESPECÍFICAS: Si encuentras libros disponibles, menciona título, autor, precio y disponibilidad\\n3. ❌ HONESTIDAD SOBRE STOCK: Si un libro no tiene stock, dilo claramente y sugiere alternativas\\n4. 💡 RECOMENDACIONES: Basándote en el catálogo actual y las conversaciones anteriores\\n5. 💬 TONO AMIGABLE: Mantén un tono profesional pero cercano, como un librero experto\\n\\nSiempre incluye emojis relevantes para hacer la conversación más amigable.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"INFORMACIÓN ACTUAL DEL CATÁLOGO:\\n{{ $json.context }}\\n\\nCONSULTA DEL CLIENTE: {{ $json.userMessage }}\\n\\nTipo de consulta detectada: {{ $json.queryType }}\\nLibros encontrados: {{ $json.foundBooks }}\\n\\nPor favor responde de manera útil y específica basándote en la información actual del catálogo. Si hay libros disponibles, menciona precios y stock. Si no hay stock, sé honesto y sugiere alternativas.\"\n    }\n  ],\n  \"max_tokens\": 600,\n  \"temperature\": 0.8\n}",
+        "options": {}
+      },
+      "id": "openai-response-node",
+      "name": "5. Generar Respuesta IA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1120, 240],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-creds-id",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.twilio.com/2010-04-01/Accounts/YOUR_ACCOUNT_SID/Messages.json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/x-www-form-urlencoded"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "To",
+              "value": "{{ $('1. Recibir Mensaje WhatsApp').item.json.body.sender.id }}"
+            },
+            {
+              "name": "From",
+              "value": "whatsapp:+YOUR_TWILIO_NUMBER"
+            },
+            {
+              "name": "Body",
+              "value": "{{ $json.choices[0].message.content }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "send-whatsapp-node",
+      "name": "6. Enviar Respuesta WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1340, 240],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "twilio-creds-id",
+          "name": "Twilio Credentials"
+        }
+      },
+      "notes": "Envía la respuesta via WhatsApp"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\n  \"body\": {\n    \"message\": {\n      \"text\": \"Hola! ¿Tienes algún libro de García Márquez disponible? Me interesa el precio también\"\n    },\n    \"sender\": {\n      \"id\": \"whatsapp:+5491155071717\"\n    }\n  },\n  \"GOOGLE_SHEET_ID\": \"TU_GOOGLE_SHEET_ID_AQUI\",\n  \"GOOGLE_DOC_ID\": \"TU_GOOGLE_DOC_ID_AQUI\"\n}",
+        "options": {}
+      },
+      "id": "test-data-node",
+      "name": "📝 Configuración y Prueba",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 180],
+      "notes": "IMPORTANTE: Configura aquí los IDs de tu Google Sheet y Google Doc"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Nodo para manejar errores y logging\nconst input = $input.first().json;\n\nconsole.log('📊 Datos procesados:', {\n  mensaje: input.userMessage,\n  libros_encontrados: input.foundBooks,\n  tipo_consulta: input.queryType\n});\n\n// Log para debugging\nif (input.foundBooks === 0) {\n  console.log('⚠️  No se encontraron libros para:', input.userMessage);\n}\n\nreturn $input.all();"
+      },
+      "id": "logging-node",
+      "name": "📊 Logging y Debug",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 360],
+      "notes": "Nodo opcional para debug y logging"
+    }
+  ],
+  "connections": {
+    "START": {
+      "main": [
+        [
+          {
+            "node": "📝 Configuración y Prueba",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Recibir Mensaje WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "2. Leer Catálogo (Google Sheets)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "3. Leer Conversaciones (Google Docs)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Leer Catálogo (Google Sheets)": {
+      "main": [
+        [
+          {
+            "node": "4. Procesar y Buscar Información",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Leer Conversaciones (Google Docs)": {
+      "main": [
+        [
+          {
+            "node": "4. Procesar y Buscar Información",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Procesar y Buscar Información": {
+      "main": [
+        [
+          {
+            "node": "5. Generar Respuesta IA",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "📊 Logging y Debug",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5. Generar Respuesta IA": {
+      "main": [
+        [
+          {
+            "node": "6. Enviar Respuesta WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📝 Configuración y Prueba": {
+      "main": [
+        [
+          {
+            "node": "2. Leer Catálogo (Google Sheets)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "3. Leer Conversaciones (Google Docs)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "workflow-google-realtime-v1",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "id": "BookChatbotGoogleRealTime",
+  "tags": ["chatbot", "whatsapp", "libros", "google-sheets", "real-time"]
+}
